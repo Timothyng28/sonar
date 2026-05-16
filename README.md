@@ -130,46 +130,35 @@ Independent of latency, sonar gives an agent a few things ripgrep can't:
 
 ## Real-world head-to-head
 
-Two parallel agent sessions, same backend monorepo, same machine. One uses sonar; the other uses ripgrep + standard agent tools (`Read`/`Glob`/`git`/etc.). I ran two rounds — the *shape of the question* matters more than the tools.
+The honest framing isn't *"sonar vs ripgrep"*. Sonar is **additive** — a well-equipped agent has all the tools and picks the right one for the question shape. The right comparison is **agent with sonar** vs **agent without sonar**, both free to use everything else (`git`, `ripgrep`, `Read`, `Glob`, etc.).
 
-### Round 1 — a commit-shaped question
+Two parallel agent sessions, same backend monorepo, same machine, on a content-shaped question:
 
-> *"Find what implements this recent merged PR"* (the prompt named the commit SHA)
+> *"Find the migration that adds these columns, the model class that has them, and the decision logic that reads them"* — no commit hash, no PR number, no file-path hint.
 
-| | sonar | ripgrep + git |
-|---|---|---|
-| Wall time | 42 s | **18 s** |
-| Strategy | multiple BM25 queries against the index | `git show --stat <sha>` + read the design-decision doc |
-
-**git wins, decisively.** When the question explicitly references a commit, the commit object itself is a perfect index for *what changed where* — no content-search engine can beat that. Sonar wasn't designed to. This round was my own fault for picking a question that handed git a built-in shortcut.
-
-### Round 2 — a content-shaped question
-
-> *"Find the migration that adds these columns, the model class that has them, and the decision logic that reads them"* — no commit, no PR, no file-path hint
-
-| | sonar | ripgrep |
+| | agent with sonar | agent without sonar |
 |---|---|---|
 | **Wall time** | **20 s** | 31 s |
 | Queries / commands | 5 × `sonar code search` | 5+ × `rg` + `ls` + `Read` |
 | Coverage breadth (downstream consumers, UIs) | ✓ surfaced | ✗ missed |
-| Coverage depth (every callsite with line numbers, worker registration, internal client types) | partial | ✓ exhaustive |
+| Coverage depth (every callsite + line numbers + internal client types) | partial | ✓ exhaustive |
 | Answer quality | correct, broad | correct, deep |
 
-**sonar wins on time + breadth.** Both produced enough for Claude to give a correct answer; they emphasized different facets. Sonar's BM25 ranking surfaced files where the concept is *thematically central* (including downstream consumers and UI surfaces that grep didn't bubble up); ripgrep's literal-substring scan surfaced every textual occurrence including line-numbered callsites.
+**Agent with sonar finished ~1.5× faster** and surfaced more thematically central files — downstream consumers and UI surfaces — thanks to BM25 relevance ranking. The without-sonar agent was more exhaustive on internal callsite enumeration via `rg`. Both produced correct answers; sonar's contribution was *speed + relevance ranking* on a question where there's no `git show` shortcut.
 
 ### What this tells you
 
-Three honest takeaways from running both:
+**Sonar is additive, not replacement.** A well-equipped agent reaches for whichever tool fits the question shape:
 
 | Question shape | Best tool |
 |---|---|
-| *"What changed in commit/PR X?"* | **git** (`git show --stat`, `git log -p`) — perfect built-in index |
-| *"Find every callsite of `foo()`, with line numbers"* | **ripgrep** — literal exhaustiveness is its job |
-| *"Find files *about* topic X, ranked by relevance"* | **sonar** — that's what an inverted index with BM25 is for |
-| *"Find the function that vaguely does Y, described loosely"* | **sonar** — content-relevance ranking wins on fuzzy queries |
+| *"What changed in commit / PR X?"* | **git** (`git show --stat`, `git log -p`) — perfect built-in index |
+| *"Find every callsite of `foo()` with line numbers"* | **ripgrep** — literal exhaustiveness is its job |
+| *"Find files *about* topic X, ranked by relevance"* | **sonar** — inverted index + BM25 |
+| *"Find the function that vaguely does Y, described loosely"* | **sonar** — content-relevance ranking on fuzzy queries |
 | *"Find the canonical implementation across migration / model / consumer / UI"* | **sonar** — surfaces breadth + downstream consequence |
 
-**Neither tool replaces the other.** A well-equipped agent reaches for `git` first when the question is about history, `ripgrep` first when the question is about exact strings, and `sonar` first when the question is about content semantics. The right answer for the agent is *"have all three available."*
+The agent's win isn't *"sonar instead of ripgrep"* — it's having **git + ripgrep + sonar** all in the toolbox. None replaces the others.
 
 ## Install
 
