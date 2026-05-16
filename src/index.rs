@@ -1,11 +1,10 @@
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, SecondsFormat, Utc};
 use serde::Serialize;
-use std::ops::Bound;
 use std::path::{Path, PathBuf};
 use tantivy::collector::TopDocs;
 use tantivy::directory::MmapDirectory;
-use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, RangeQuery, TermQuery};
+use tantivy::query::{BooleanQuery, Occur, Query, QueryParser, TermQuery};
 use tantivy::schema::document::Value;
 use tantivy::schema::{
     DateOptions, Field, IndexRecordOption, NumericOptions, Schema, SchemaBuilder, INDEXED, STORED,
@@ -163,12 +162,17 @@ impl EventSearcher {
         let mut clauses: Vec<(Occur, Box<dyn Query>)> = vec![(Occur::Must, text_query)];
 
         if let Some(since) = args.since {
-            let lo = TantivyDateTime::from_timestamp_micros(since.timestamp_micros());
-            let hi = TantivyDateTime::from_timestamp_micros(i64::MAX / 2);
-            let lo_term = Term::from_field_date_for_search(self.fields.timestamp, lo);
-            let hi_term = Term::from_field_date_for_search(self.fields.timestamp, hi);
-            let range = RangeQuery::new(Bound::Included(lo_term), Bound::Excluded(hi_term));
-            clauses.push((Occur::Must, Box::new(range)));
+            // tantivy 0.26's Term-based RangeQuery silently returns 0 hits on
+            // Date fields (verified empirically: even an epoch-to-MAX range
+            // matches nothing). Parsing the range through QueryParser against
+            // the timestamp field works correctly — same primitive, different
+            // construction path. See examples/since_debug.rs for the probe.
+            let iso = since.to_rfc3339_opts(SecondsFormat::Secs, true);
+            let qstr = format!("timestamp:[{} TO *]", iso);
+            let range_query = qp
+                .parse_query(&qstr)
+                .context("parsing date range")?;
+            clauses.push((Occur::Must, range_query));
         }
 
         if let Some(project) = &args.project {
