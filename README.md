@@ -7,7 +7,11 @@
 ![protocol](https://img.shields.io/badge/protocol-MCP-purple)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-Inverted-index search over **your Claude Code conversation history** *and* **the canonical state of your source code**, served from memory-mapped tantivy indexes. Two MCP tools, one binary, one server process. Any agent can answer *"which session did I work on X?"* or *"where is X implemented in this codebase?"* in microseconds.
+**Ripgrep, optimized for agents.**
+
+Sonar is a content-search engine built for the way agents actually search: dozens of queries per session against a slowly-changing corpus, ranked structured output, sub-millisecond per-call latency, exposed over MCP. Two indexes — your **source code** (typically `development`, reindexed on `git pull`) and your **AI conversation history** (reindexed when each session closes) — served by one MCP server process.
+
+If you're typing `rg` at a terminal, ripgrep is still the right tool. If you're an agent running 50 queries against the same codebase per session, sonar's pre-built BM25 inverted index does the work in **microseconds** instead of milliseconds, **ranks by relevance** instead of filesystem-walk order, and returns **structured JSON** instead of file paths.
 
 ## Two tools, one server
 
