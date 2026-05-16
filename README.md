@@ -22,18 +22,7 @@ Both share the same MCP server process — one `sonar mcp` child per Claude Code
 - Live code in your worktree? Use native `Read` / `Grep`. The agent can see it.
 - **Past sessions and merged code** — *that's* what sonar is for.
 
-## At a glance
-
-| Metric | Transcripts | Source code |
-|---|---|---|
-| **Query latency (warm, in-process)** | **279 µs median** | **303 µs median** |
-| End-to-end CLI (incl. startup) | 5.4 ms mean | ~6 ms mean |
-| Bootstrap | 2.0 s for 146 k events | 0.3 s for ~20 files / 0.1 MB; scales linearly |
-| Index size on disk | ~8% of corpus | ~7% of corpus |
-| Binary size | 6.8 MB, single static binary, no external services | |
-| Tests | **21/21 passing across 6 suites** | |
-
-## How it actually works (the speed isn't really mmap)
+## How it actually works
 
 Both sonar and ripgrep use `mmap`. The real difference is **what each tool has to look at on every query.**
 
