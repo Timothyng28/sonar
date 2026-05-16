@@ -18,8 +18,7 @@ Inverted-index search over **your Claude Code conversation history** *and* **the
 
 Both share the same MCP server process — one `sonar mcp` child per Claude Code session serves both indexes. Both deliberately index "the past after it canonicalizes," never the live present:
 
-- Live conversation? Already in Claude's context. Don't need to search for it.
-- Live code in your worktree? Use native `Read` / `Grep`. The agent can see it.
+- Live conversation, live edits? Already in the agent's context. Don't need to search for them.
 - **Past sessions and merged code** — *that's* what sonar is for.
 
 ## How it actually works
@@ -264,7 +263,7 @@ Claude picks the right tool. Both return ranked structured hits with snippets; C
 | `sonar search <query>` | CLI search. `--since 7d`, `--project X`, `--limit N`, `--bench 100` |
 | `sonar stats` | Show transcript index status |
 
-### Source code (NEW)
+### Source code
 
 | Command | Purpose |
 |---|---|
