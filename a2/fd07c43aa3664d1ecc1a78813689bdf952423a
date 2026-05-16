@@ -1,0 +1,20 @@
+README.md
+  s_095ebcb7423a77::t_027cc3b9a69c70 139,144,155
+  s_095ebcb7423a77::t_3bce1769fab78e 133,135,137,147,151,156-158,161
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.4.8",
+  "base_commit_sha": "a2fd07c43aa3664d1ecc1a78813689bdf952423a",
+  "prompts": {},
+  "sessions": {
+    "s_095ebcb7423a77": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d8ad4189-85de-4b95-8f16-00cdca500922",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Timothy <Timothyng28@gmail.com>"
+    }
+  }
+}
