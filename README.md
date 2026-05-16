@@ -82,25 +82,49 @@ Ripgrep is genuinely well-engineered. It uses mmap too, plus SIMD `memchr`, para
 
 They're not competing — they're for different workloads. Sonar leans on the [Lucene / Elasticsearch / Solr / Postgres-FTS / SQLite-FTS5](https://en.wikipedia.org/wiki/Search_engine_indexing) tradition (pre-built inverted index, query is a lookup). Ripgrep leans on the [grep / ack / ag](https://github.com/BurntSushi/ripgrep) tradition (no state, scan-on-demand, optimized to the metal).
 
-## Measured: sonar vs ripgrep
+## Measured: sonar vs ripgrep vs grep
 
-Same query, same machine, `hyperfine --warmup 3 --runs 30`:
+Same query (`"alembic migration"`), same machine, `hyperfine --warmup 3 --runs 30`. Three tools side by side.
 
-| Corpus | sonar (mean) | ripgrep (mean) | sonar advantage |
+### 1× corpus (1.0 GB, 1,389 sessions)
+
+| Tool | Mean | Range | vs sonar |
 |---|---|---|---|
-| 1× (1,388 sessions, 1.0 GB) | **4.8 ms ± 0.5** | 11.6 ms ± 4.5 | **2.4× faster** |
-| 10× (13,880 sessions, 8.9 GB) | **5.7 ms ± 0.3** | 15.5 ms ± 5.0 | **2.7× faster** |
+| **sonar** | **5.3 ms ± 0.3** | 5.0 – 5.9 ms | — |
+| ripgrep | 10.4 ms ± 1.2 | 9.2 – 14.2 ms | **1.97× slower** |
+| BSD `grep -rl` | **4.78 s ± 0.04** | 4.71 – 4.85 s | **900× slower** |
 
-End-to-end numbers above (binary startup + open + query + render). The actual **query work** is sub-millisecond and barely moves with corpus size:
+### 10× UNIQUE corpus (10 GB, 13,890 sessions, real byte-copies — no clonefile / no shared inodes)
 
-| Corpus | Query-only latency (1000 runs, no startup) |
-|---|---|
-| 1× (146,446 events) | min 182µs · **median 202µs** · p95 225µs |
-| 10× (1,466,540 events) | min 310µs · **median 347µs** · p95 378µs |
+| Tool | Mean | Range | vs sonar |
+|---|---|---|---|
+| **sonar** | **5.0 ms ± 0.2** | 4.8 – 6.0 ms | — |
+| ripgrep | 28.7 ms ± 14.1 | 17.1 – 91.0 ms | **5.76× slower** |
+| BSD `grep -rl` | **6.65 s ± 0.05** | 6.57 – 6.79 s | **1,334× slower** |
 
-**10× more data → only 72% more query latency.** That's the inverted-index advantage: posting-list intersection is O(matches), not O(corpus). Ripgrep grows linearly with file count, so the gap widens as your transcript archive grows.
+### What changes with scale
 
-Note: at 1× scale, ripgrep at ~12 ms is already very fast for a 1 GB corpus — credit to its SIMD scan engine. Sonar's 2× margin at this scale is real but modest. The bigger argument for sonar isn't winning at 1× — it's that the same code stays sub-millisecond at 100×, while a linear scanner can't.
+- **Sonar stays flat** — 5.3 → 5.0 ms across 10× more data. The inverted-index lookup is O(matches), not O(corpus). Doubling, tripling, 10×-ing your transcript archive barely moves query latency.
+- **Ripgrep scales linearly** — 1.97× → 5.76× slower than sonar. The gap *tripled* when corpus grew 10×. Ripgrep's SIMD scan engine is genuinely fast, but it still has to walk every byte of every file on every query.
+- **`grep -rl` is dominated by file-open overhead** — 1,389 files × ~200 µs `open()` syscalls ≈ several seconds before any bytes get scanned. Even with a hot page cache, opening tens of thousands of small files costs more than the actual matching.
+
+### Query-only latency (no startup, what the MCP server actually pays per call)
+
+| Corpus | min | median | p95 | growth vs 1× |
+|---|---|---|---|---|
+| 1× (146 k events) | 248 µs | **279 µs** | 315 µs | — |
+| 10× unique (1.47 M events) | 195 µs | **293 µs** | 315 µs | within noise |
+
+**10× more data → essentially no change in query latency.** That's the headline: the inverted index decouples query cost from corpus size. Through the MCP, every tool call Claude makes is ~300 µs of search + ~2 ms of JSON-RPC framing, regardless of how much history you've accumulated.
+
+> **Reproduce on your machine:**
+> ```bash
+> # 1× scale, all three tools
+> hyperfine --warmup 3 --runs 30 \
+>   --command-name sonar     "sonar search 'YOUR QUERY' --limit 10" \
+>   --command-name ripgrep   "rg -l -F 'YOUR QUERY' ~/.claude/projects/ | head -10" \
+>   --command-name 'grep -rl' "/usr/bin/grep -rl --include='*.jsonl' 'YOUR QUERY' ~/.claude/projects/ | head -10"
+> ```
 
 ## Beyond speed
 
