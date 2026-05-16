@@ -7,7 +7,7 @@
 ![protocol](https://img.shields.io/badge/protocol-MCP-purple)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
-Memory-mapped, instant search across your Claude Code conversation history. Exposed as an MCP tool so any agent can answer *"which session did I work on X?"* in microseconds.
+Inverted-index search over your Claude Code conversation history, served from a memory-mapped tantivy index. Exposed as an MCP tool so any agent can answer *"which session did I work on X?"* in microseconds.
 
 ## At a glance
 
@@ -22,7 +22,67 @@ Memory-mapped, instant search across your Claude Code conversation history. Expo
 | External services | none (fully local) |
 | Tests | 10/10 passing across 5 suites |
 
-## Speed vs ripgrep
+## What it does
+
+Claude Code writes every session you have to a `.jsonl` file under `~/.claude/projects/`. Over time you accumulate hundreds of conversations spanning thousands of turns and millions of words. They're sitting on disk, unread.
+
+`sonar` indexes all of that into a [tantivy](https://github.com/quickwit-oss/tantivy) full-text inverted index, exposes one MCP tool over stdio, and answers:
+
+> *"Which session did I work on the app xyz frontend?"*
+
+…in ~5 ms end-to-end, ~250 µs of which is the actual search.
+
+## How it actually works (the speed isn't really mmap)
+
+Both sonar and ripgrep use `mmap`. The real difference is **what each tool has to look at on every query.**
+
+Sonar builds an **inverted index** at index time. Conceptually it's a phone book: for every word that appears in any transcript, sonar stores a list of which session events contain it.
+
+```
+"alembic"    → [event_3, event_17, event_42, …]    (posting list)
+"migration"  → [event_3, event_17, event_88, …]
+```
+
+A query for `"alembic migration"` becomes: look up each term in the dictionary (microseconds), intersect the posting lists (microseconds), fetch the top-N matches' stored snippets (microseconds). **The cost is proportional to the number of matches, not the size of the corpus.** Doubling your transcript archive barely moves the query latency.
+
+That index is what's mmap'd. The term dictionary (a compressed Finite State Transducer), the posting lists, and the stored fields all live in segment files under `~/.sonar/index/`, and tantivy memory-maps them. **Mmap is how the index gets read efficiently across process boundaries** — the indexer writer + the MCP server reader + the CLI all share pages via the OS page cache. It's the transport, not the secret sauce. The inverted-index data structure is.
+
+Tantivy provides the inverted-index infrastructure (FST, posting lists, BM25 scoring, multi-segment commits, crash-safe reads); sonar feeds Claude transcripts in and queries them.
+
+## Sonar vs ripgrep — different tools, different jobs
+
+Ripgrep is genuinely well-engineered. It uses mmap too, plus SIMD `memchr`, parallel walks, and Aho-Corasick for multi-pattern matching. The reason it doesn't build an inverted index isn't oversight — it's a deliberate trade-off.
+
+| | ripgrep | sonar |
+|---|---|---|
+| **Setup cost** | Zero — point at any directory and go | Index build (~2 s / 146 k events) needed first |
+| **Best when source is…** | constantly edited (a working directory) | append-mostly (Claude transcripts, log archives, mail) |
+| **Query types** | full regex including PCRE | tokenized literal-term queries (BM25) |
+| **Per-query work** | **O(corpus bytes)** — scan everything | **O(matching docs)** — look up posting lists |
+| **Scaling** | linear with corpus size | sub-linear; grows with match count, not corpus |
+| **Ranking** | none — file paths in walk order | BM25 relevance, deterministic across runs |
+| **Output** | file paths + matching lines | structured: `{session_id, snippet, score, timestamp, …}` |
+| **On-disk artifact** | none | index folder (~6% of corpus size) |
+| **Stays in sync if files change** | trivially | needs a hook or daemon to reindex |
+
+**Use ripgrep when:**
+
+- You're grepping a working directory of code
+- You need regex
+- Files change every few seconds and you don't want to maintain an index
+- It's a one-off search and you don't want infrastructure
+
+**Use sonar when:**
+
+- You're searching Claude Code conversation history (or any append-mostly archive)
+- An agent is going to query the same corpus many times in a session
+- You want ranked results, not just "files containing X"
+- You want sub-millisecond latency that doesn't degrade as the archive grows
+- You want structured output an agent can consume without re-reading files
+
+They're not competing — they're for different workloads. Sonar leans on the [Lucene / Elasticsearch / Solr / Postgres-FTS / SQLite-FTS5](https://en.wikipedia.org/wiki/Search_engine_indexing) tradition (pre-built inverted index, query is a lookup). Ripgrep leans on the [grep / ack / ag](https://github.com/BurntSushi/ripgrep) tradition (no state, scan-on-demand, optimized to the metal).
+
+## Measured: sonar vs ripgrep
 
 Same query, same machine, `hyperfine --warmup 3 --runs 30`:
 
@@ -31,49 +91,28 @@ Same query, same machine, `hyperfine --warmup 3 --runs 30`:
 | 1× (1,388 sessions, 1.0 GB) | **4.8 ms ± 0.5** | 11.6 ms ± 4.5 | **2.4× faster** |
 | 10× (13,880 sessions, 8.9 GB) | **5.7 ms ± 0.3** | 15.5 ms ± 5.0 | **2.7× faster** |
 
-End-to-end numbers above (binary startup + open + query + render). The actual **query work** is sub-millisecond:
+End-to-end numbers above (binary startup + open + query + render). The actual **query work** is sub-millisecond and barely moves with corpus size:
 
 | Corpus | Query-only latency (1000 runs, no startup) |
 |---|---|
 | 1× (146,446 events) | min 182µs · **median 202µs** · p95 225µs |
 | 10× (1,466,540 events) | min 310µs · **median 347µs** · p95 378µs |
 
-**Sonar's query latency grows by 72% when the corpus grows 10×.** ripgrep scales linearly with file count, so the gap *widens* as your transcript archive grows — sonar plateaus, ripgrep keeps slowing down.
+**10× more data → only 72% more query latency.** That's the inverted-index advantage: posting-list intersection is O(matches), not O(corpus). Ripgrep grows linearly with file count, so the gap widens as your transcript archive grows.
 
-## Speed isn't the only win
+Note: at 1× scale, ripgrep at ~12 ms is already very fast for a 1 GB corpus — credit to its SIMD scan engine. Sonar's 2× margin at this scale is real but modest. The bigger argument for sonar isn't winning at 1× — it's that the same code stays sub-millisecond at 100×, while a linear scanner can't.
 
-### 1. Deterministic ranking
+## Beyond speed
 
-Ripgrep's parallel filesystem walk returns matches in **arbitrary order** — run the same query twice, you can get a different "top 5" because `head -5` slices a different prefix. Sonar's BM25 score is stable: same query → same ranking, every time.
+Independent of latency, sonar gives an agent a few things ripgrep can't:
 
-### 2. Content-aware over path-aware
+1. **Deterministic ranking.** Ripgrep's parallel filesystem walk returns matches in arbitrary order — the "top 5" can change run-to-run because `head -5` slices a different prefix each time. Sonar's BM25 score is stable: same query, same ranking, every time.
 
-A common failure mode for grep-based search: the directory containing a session may not match the topic. You might have built *feature X* in a parent repo session whose path doesn't mention *feature X* at all — the *content* does, but the *path* doesn't. Ripgrep matches on path or on a literal substring; if it finds a misleadingly-named directory first, it'll stop there. Sonar's BM25 ranking surfaces the session where the topic is actually *discussed*, regardless of which directory it lived in.
+2. **Content-aware matching.** Grep tools match on the literal substring; if a session about *feature X* is filed in a directory whose path doesn't say "feature X", a path-name heuristic misses it. Sonar's BM25 ranks by *content relevance*, not where the file happens to live.
 
-### 3. Structured filters
+3. **Structured filters.** `--since 7d`, `--project foo`, `--role assistant` — one flag each. Ripgrep would need a shell pipeline of `find` + `xargs` + manual JSON parsing to do the same.
 
-Filter by `--since 7d`, `--project ccai`, `--role assistant` in one flag. Ripgrep would need a shell pipeline of `find` + `xargs` + manual JSON parsing.
-
-### 4. Output ready for an agent
-
-Sonar returns structured hits — `{session_id, project, timestamp, file_path, event_index, snippet, score}` — so an MCP-connected Claude can act on the result directly. Ripgrep returns file paths; Claude has to `Read` each one to learn anything.
-
-## What it does
-
-Claude Code writes every session you have to a `.jsonl` file under `~/.claude/projects/`. Over time you accumulate hundreds of conversations spanning thousands of turns and millions of words. They're sitting on disk, unread.
-
-`sonar` indexes all of that into a [tantivy](https://github.com/quickwit-oss/tantivy) full-text index backed by `MmapDirectory`, then exposes one MCP tool over stdio. Plug it into Claude Code and ask:
-
-> *"Which session did I work on the app xyz frontend?"*
-
-…and get an answer in ~5 ms.
-
-## Why mmap
-
-- **Sub-millisecond queries.** The index isn't loaded into RAM; the OS pages in only the bytes touched during a search.
-- **Safe concurrent reads while writing.** The daemon writer, the MCP server, multiple Claude Code sessions, and the CLI all share the same memory-mapped index without locks.
-- **Zero copies into heap.** Search hits read straight from page-cache-backed pages.
-- **Survives crashes.** Tantivy's commit model writes new segments atomically; readers reload on commit.
+4. **Agent-ready output.** Sonar returns `{session_id, project, timestamp, file_path, event_index, snippet, score}` as JSON. An MCP-connected Claude can act on the result directly. Ripgrep returns paths; Claude would have to `Read` each one to learn anything.
 
 ## Install
 
