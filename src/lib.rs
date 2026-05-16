@@ -2,6 +2,7 @@
 //! history. Library entry point. The binary in `src/main.rs` is a thin CLI
 //! over these modules.
 
+pub mod code;
 pub mod daemon;
 pub mod index;
 pub mod install;

@@ -2,7 +2,7 @@
 name = "sonar"
 version = "0.1.0"
 edition = "2021"
-description = "Memory-mapped, instant search across your Claude Code conversation history. MCP-native."
+description = "Memory-mapped, instant search across Claude Code conversation history AND source code. MCP-native."
 license = "MIT"
 repository = "https://github.com/Timothyng28/sonar"
 
@@ -16,6 +16,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "signa
 chrono = { version = "0.4", features = ["serde"] }
 clap = { version = "4", features = ["derive"] }
 walkdir = "2"
+ignore = "0.4"
 dirs = "5"
 anyhow = "1"
 tracing = "0.1"
