@@ -170,20 +170,54 @@ Then wire it into Claude Code in one command:
 
 ## Adding source code
 
-Sonar also indexes source code (typically the canonical state of `development`). The hook fires after `git pull` so the index always tracks what's actually merged. Worktrees with in-progress changes are intentionally NOT indexed — for those, the agent uses `Read`/`Grep` directly.
+Sonar also indexes source code — typically the canonical state of one branch per repo. The hook fires after `git pull` does a merge / fast-forward, so the index always tracks what's actually merged. Worktrees with in-progress changes are intentionally NOT indexed — for those, the agent uses `Read`/`Grep` directly.
 
 ```bash
 cd ~/Desktop/myrepo
-~/Desktop/sonar/target/release/sonar code index --repo .          # one-time bootstrap
-~/Desktop/sonar/target/release/sonar code install --repo .        # writes .git/hooks/post-merge
+
+# 1. one-time bootstrap
+~/Desktop/sonar/target/release/sonar code index --repo .
+
+# 2. install the post-merge hook (defaults to --branch development)
+~/Desktop/sonar/target/release/sonar code install --repo .
+
+# or pick a different tracked branch:
+~/Desktop/sonar/target/release/sonar code install --repo . --branch main
+~/Desktop/sonar/target/release/sonar code install --repo . --branch trunk
 ```
 
-After install, every `git pull` on the tracked branch (default `development`) re-indexes the repo in the background. The same MCP server now answers code questions too:
+After install, every `git pull` that updates the tracked branch re-indexes the repo in the background (~few seconds). The same MCP server now answers code questions too:
 
 > *"Where do we set up the auth middleware in this repo?"*
 > *"Find the alembic migration that added auto_approval columns."*
 
-Claude calls `sonar_code` instead of `sonar` based on whether you're asking about past conversations or past code.
+Claude picks `sonar_code` for "where in the code" questions and `sonar` for "what session" questions.
+
+### How the hook handles branches & worktrees
+
+The hook is installed at `.git/hooks/post-merge`, which fires after **any** successful `git pull` / `git merge` in the repo *or any of its worktrees* (git worktrees share `.git/hooks/`). The hook itself contains a branch check — it only reindexes if the merging worktree is on the tracked branch:
+
+```bash
+# .git/hooks/post-merge (generated)
+BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [ "$BRANCH" = "development" ]; then
+  sonar code index --repo /path/to/repo --branch development &
+fi
+```
+
+So in a worktree setup:
+
+| Action | Hook fires? | Reindex? |
+|---|---|---|
+| `git pull` in main repo (on `development`) | ✓ | ✓ |
+| `git pull` in `.worktrees/feature-foo` (on `feature/foo`) | ✓ | ✗ (branch check fails — correctly, feature branches aren't canonical) |
+| `git merge feature/foo` into `development` in main repo | ✓ | ✓ |
+
+This is why the hook tracks **one branch per repo** — the canonical one. If you have multiple long-lived branches you want indexed separately (rare), install the hook multiple times with different `--label` and `--branch`, and they'll write to separate index dirs under `~/.sonar/code/`.
+
+### Storage stays bounded
+
+Each reindex calls `delete_by_branch` on the writer first, then re-adds every file. Tantivy tombstones the old segment(s) and merges them out in the background. The on-disk index stays at roughly **one corpus's worth** (~7% of source size) regardless of how many times you reindex. Verified empirically: 5 back-to-back reindexes of a small repo went from 256 KB → 264 KB, not 256 KB × 5.
 
 ## Usage from inside Claude Code
 
