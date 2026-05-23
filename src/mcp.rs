@@ -10,7 +10,7 @@ use rmcp::{transport::stdio, ServiceExt};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -117,12 +117,21 @@ impl SonarServer {
     ) -> Result<CallToolResult, McpError> {
         let label = match args.repo.clone() {
             Some(r) => r,
-            None => match default_code_repo() {
-                Some(r) => r,
-                None => {
+            None => match resolve_default_code_repo() {
+                RepoResolution::One(r) => r,
+                RepoResolution::None => {
                     return Err(McpError::invalid_params(
                         "no code repos indexed. run `sonar code index --repo <path>` first."
                             .to_string(),
+                        None,
+                    ));
+                }
+                RepoResolution::Many(labels) => {
+                    return Err(McpError::invalid_params(
+                        format!(
+                            "multiple repos indexed ({}). specify which one with `repo: \"<label>\"`.",
+                            labels.join(", ")
+                        ),
                         None,
                     ));
                 }
@@ -184,20 +193,48 @@ impl ServerHandler for SonarServer {
     }
 }
 
-/// Pick the only indexed code repo if exactly one is set up. Used to make
-/// `sonar_code` work without specifying `repo` for single-repo users.
-fn default_code_repo() -> Option<String> {
-    let home = dirs::home_dir()?;
-    let dir = home.join(".sonar").join("code");
-    let mut entries = std::fs::read_dir(&dir).ok()?.filter_map(|e| e.ok()).filter(|e| {
-        e.file_type().map(|t| t.is_dir()).unwrap_or(false)
-    });
-    let first = entries.next()?;
-    if entries.next().is_some() {
-        // More than one — caller must specify which.
-        return None;
+/// Outcome of resolving the default code repo when `sonar_code` is called
+/// without an explicit `repo`. The `Many` variant carries the labels so the
+/// caller can tell the user which one to pick, instead of conflating an
+/// ambiguous call with a genuinely empty index.
+enum RepoResolution {
+    None,
+    One(String),
+    Many(Vec<String>),
+}
+
+/// List code-repo labels (sub-dir names) under `dir`, sorted for stable output.
+/// `dir` is the `~/.sonar/code/` index root.
+fn code_repos_in(dir: &Path) -> Vec<String> {
+    let mut labels: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .collect();
+    labels.sort();
+    labels
+}
+
+/// Classify the indexed repos in `dir` into the resolution the caller acts on.
+fn classify_code_repos(dir: &Path) -> RepoResolution {
+    let mut labels = code_repos_in(dir);
+    match labels.len() {
+        0 => RepoResolution::None,
+        1 => RepoResolution::One(labels.pop().expect("len checked")),
+        _ => RepoResolution::Many(labels),
     }
-    Some(first.file_name().to_string_lossy().to_string())
+}
+
+/// Pick the only indexed code repo if exactly one is set up, so `sonar_code`
+/// works without specifying `repo` for single-repo users. Distinguishes a
+/// genuinely empty index from an ambiguous multi-repo state.
+fn resolve_default_code_repo() -> RepoResolution {
+    let Some(home) = dirs::home_dir() else {
+        return RepoResolution::None;
+    };
+    classify_code_repos(&home.join(".sonar").join("code"))
 }
 
 /// Entrypoint for `sonar mcp`: start the stdio MCP server. Blocks until the
@@ -263,3 +300,55 @@ pub fn print_hook_config_snippet() -> Result<()> {
 // suppress dead-code warnings on McpError import path for older rmcp builds
 #[allow(dead_code)]
 fn _ctx_type_anchor(_c: &RequestContext<RoleServer>) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn mkrepo(root: &Path, label: &str) {
+        std::fs::create_dir_all(root.join(label)).unwrap();
+    }
+
+    #[test]
+    fn empty_index_resolves_to_none() {
+        let tmp = TempDir::new().unwrap();
+        assert!(matches!(classify_code_repos(tmp.path()), RepoResolution::None));
+    }
+
+    #[test]
+    fn missing_dir_resolves_to_none() {
+        let tmp = TempDir::new().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        assert!(matches!(classify_code_repos(&missing), RepoResolution::None));
+    }
+
+    #[test]
+    fn single_repo_resolves_to_that_repo() {
+        let tmp = TempDir::new().unwrap();
+        mkrepo(tmp.path(), "claritycare");
+        match classify_code_repos(tmp.path()) {
+            RepoResolution::One(r) => assert_eq!(r, "claritycare"),
+            other => panic!("expected One, got {:?}", labels_of(&other)),
+        }
+    }
+
+    #[test]
+    fn multiple_repos_resolve_to_sorted_labels() {
+        let tmp = TempDir::new().unwrap();
+        mkrepo(tmp.path(), "sonar");
+        mkrepo(tmp.path(), "claritycare");
+        match classify_code_repos(tmp.path()) {
+            RepoResolution::Many(labels) => assert_eq!(labels, vec!["claritycare", "sonar"]),
+            other => panic!("expected Many, got {:?}", labels_of(&other)),
+        }
+    }
+
+    fn labels_of(r: &RepoResolution) -> Vec<String> {
+        match r {
+            RepoResolution::None => vec![],
+            RepoResolution::One(s) => vec![s.clone()],
+            RepoResolution::Many(v) => v.clone(),
+        }
+    }
+}
