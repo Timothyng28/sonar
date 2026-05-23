@@ -1,0 +1,23 @@
+src/mcp.rs
+  s_c7dadb9f278d87::t_57190065f66398 206-209,220-222,228-237
+  s_c7dadb9f278d87::t_329569a28218c8 303-354
+  s_c7dadb9f278d87::t_8056cc25224703 196-205,210-219,223-226
+  s_c7dadb9f278d87::t_7323d8f5e62d1f 13
+  s_c7dadb9f278d87::t_3716d3410b5e1a 120-122,129-134
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "4a4e4d2d897087e22e078757cea1f06a2efb3e90",
+  "prompts": {},
+  "sessions": {
+    "s_c7dadb9f278d87": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df456f6c-90ce-472e-b103-a714215e08b1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Timothy <Timothyng28@gmail.com>"
+    }
+  }
+}
