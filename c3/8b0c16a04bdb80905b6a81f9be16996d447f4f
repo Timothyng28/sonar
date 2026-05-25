@@ -1,0 +1,19 @@
+CLAUDE.md
+  s_c7dadb9f278d87::t_56bac9d7f89b7f 1-43
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.0",
+  "base_commit_sha": "c38b0c16a04bdb80905b6a81f9be16996d447f4f",
+  "prompts": {},
+  "sessions": {
+    "s_c7dadb9f278d87": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "df456f6c-90ce-472e-b103-a714215e08b1",
+        "model": "claude-opus-4-7"
+      },
+      "human_author": "Timothy <Timothyng28@gmail.com>"
+    }
+  }
+}
